@@ -214,7 +214,7 @@ int AnalyzeReceivedData(BYTE byArray[], BYTE byBufNum) //Analyze the communicati
                 break;
 
             case 1:    //Check ID
-                if(byArray[j] == 1 | byArray[j] == 2)
+                if(byArray[j] >= 1 && byArray[j] <= 254)
                 {
                     Com.byChkSum += byArray[j];
                     Com.byRcvBuf[Com.byPacketNum++] = byArray[j];

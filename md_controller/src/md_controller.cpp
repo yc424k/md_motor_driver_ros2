@@ -1,6 +1,9 @@
 #include "md_controller/com.hpp"
 #include "md_controller/kinematics.hpp"
 
+#include <algorithm>
+#include <chrono>
+
 #include "geometry_msgs/msg/twist.hpp"
 
 Communication Com;  
@@ -13,11 +16,46 @@ BYTE SendCmdRpm = OFF;
 int left_rpm_ = 0;
 int right_rpm_ = 0;
 
+int left_sign_ = 1;
+bool right_enabled_ = true;
+int right_driver_id_ = 2;
+int right_driver_mdt_ = 183;
+int right_gear_ratio_ = 15;
+int right_sign_ = -1;
+int cmd_timeout_ms_ = 300;
+int max_driver_rpm_ = 3000;
+
+std::chrono::steady_clock::time_point last_cmd_time_ = std::chrono::steady_clock::now();
+
+inline int ClampRpm(int value, int max_abs) {
+    if (value > max_abs) return max_abs;
+    if (value < -max_abs) return -max_abs;
+    return value;
+}
+
+void SendSideDualChannelRpm(int mdt_id, int driver_id, int wheel_rpm, int gear_ratio, int sign) {
+    int scaled_rpm = ClampRpm(wheel_rpm * gear_ratio * sign, max_driver_rpm_);
+    IByte rpm_data = Short2Byte(static_cast<short>(scaled_rpm));
+    int nArray[20] = {0};
+
+    // One side driver controls two motors (front/rear) with same target RPM.
+    nArray[0] = 1;
+    nArray[1] = rpm_data.byLow;
+    nArray[2] = rpm_data.byHigh;
+    nArray[3] = 1;
+    nArray[4] = rpm_data.byLow;
+    nArray[5] = rpm_data.byHigh;
+    nArray[6] = 0;
+
+    PutMdData(PID_PNT_VEL_CMD, mdt_id, driver_id, nArray);
+}
+
 void CmdVelCallBack(const geometry_msgs::msg::Twist::SharedPtr msg) {
     // cmd_vel에서 linear.x와 angular.z 추출
     float linear_x = msg->linear.x;   // 직진 속도 (m/s)
     float angular_z = msg->angular.z; // 회전 속도 (rad/s)
     cmdVelToRpm(linear_x, angular_z, left_rpm_, right_rpm_); //convert /cmd_vel to left_rpm_ , right_rpm_
+    last_cmd_time_ = std::chrono::steady_clock::now();
     SendCmdRpm = ON;
 }
 
@@ -40,6 +78,14 @@ int main(int argc, char *argv[]) {
     node->declare_parameter("ID", 1); //fix
     node->declare_parameter("GearRatio", 15);
     node->declare_parameter("poles", 10);
+    node->declare_parameter("left_sign", 1);
+    node->declare_parameter("right_enabled", true);
+    node->declare_parameter("RightID", 2);
+    node->declare_parameter("RightMDT", 183);
+    node->declare_parameter("RightGearRatio", 15);
+    node->declare_parameter("right_sign", -1);
+    node->declare_parameter("cmd_timeout_ms", 300);
+    node->declare_parameter("max_driver_rpm", 3000);
     node->declare_parameter("wheel_radius", 0.033);
     node->declare_parameter("wheel_base", 0.16);
 
@@ -50,6 +96,14 @@ int main(int argc, char *argv[]) {
     node->get_parameter("ID", Motor.ID);
     node->get_parameter("GearRatio", Motor.GearRatio);
     node->get_parameter("poles", Motor.poles);
+    node->get_parameter("left_sign", left_sign_);
+    node->get_parameter("right_enabled", right_enabled_);
+    node->get_parameter("RightID", right_driver_id_);
+    node->get_parameter("RightMDT", right_driver_mdt_);
+    node->get_parameter("RightGearRatio", right_gear_ratio_);
+    node->get_parameter("right_sign", right_sign_);
+    node->get_parameter("cmd_timeout_ms", cmd_timeout_ms_);
+    node->get_parameter("max_driver_rpm", max_driver_rpm_);
 
     //Robot Param load for kinematics.cpp
     float wheel_radius_param, wheel_base_param;
@@ -59,8 +113,6 @@ int main(int argc, char *argv[]) {
 
     Motor.PPR       = Motor.poles*3*Motor.GearRatio;           //poles * 3(HALL U,V,W) * gear ratio
     Motor.Tick2RAD  = (360.0/Motor.PPR)*PI / 180;
-
-    IByte iData, left_iData, right_iData; //left_iData, right_iData for dual motor
 
     int nArray[20];
     static BYTE fgInitsetting, byCntInitStep, byCntComStep, byCnt2500us, byCntStartDelay, byCntCase[5];
@@ -117,20 +169,26 @@ int main(int argc, char *argv[]) {
                     {
                         byCntCase[byCntComStep] = 0;
 
+                        const auto now = std::chrono::steady_clock::now();
+                        const auto dt_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                            now - last_cmd_time_).count();
+
+                        // Safety: stop motors if cmd_vel is stale.
+                        if (dt_ms > cmd_timeout_ms_) {
+                            left_rpm_ = 0;
+                            right_rpm_ = 0;
+                            SendCmdRpm = ON;
+                        }
+
                         if(SendCmdRpm)
                         {
-                            left_iData = Short2Byte(left_rpm_ * Motor.GearRatio); // #1,2 Wheel RPM
-                            right_iData = Short2Byte(right_rpm_ * Motor.GearRatio);
+                            // Left side driver (A)
+                            SendSideDualChannelRpm(Com.nIDMDT, Motor.ID, left_rpm_, Motor.GearRatio, left_sign_);
 
-                            nArray[0] = 1; //left motor enable
-                            nArray[1] = left_iData.byLow; //left motor rpm (lower 8bits)
-                            nArray[2] = left_iData.byHigh; //left motor rpm (higher 8bits)
-                            nArray[3] = 1; //right motor enable
-                            nArray[4] = right_iData.byLow; //right motor rpm (lower 8bits)
-                            nArray[5] = right_iData.byHigh; //right motor rpm (higher 8bits)
-                            nArray[6] = 0; //no return data
-
-                            PutMdData(PID_PNT_VEL_CMD, Com.nIDMDT, Motor.ID, nArray); //dual channel motor controller -> pid 207 (md ros manual)
+                            // Right side driver (B)
+                            if (right_enabled_) {
+                                SendSideDualChannelRpm(right_driver_mdt_, right_driver_id_, right_rpm_, right_gear_ratio_, right_sign_);
+                            }
 
                             //n대의 모터드라이버에게 동시에 main data를 요청할 경우 data를 받을 때 데이터가 섞임을 방지.
                             nArray[0] = PID_MAIN_DATA;
@@ -161,6 +219,9 @@ int main(int argc, char *argv[]) {
                     case 1: //Motor connect check
                         nArray[0] = PID_MAIN_DATA;
                         PutMdData(PID_REQ_PID_DATA, Com.nIDMDT, Motor.ID, nArray);
+                        if (right_enabled_) {
+                            PutMdData(PID_REQ_PID_DATA, right_driver_mdt_, right_driver_id_, nArray);
+                        }
 
                         if(Motor.InitMotor == ON)
                             Motor.InitError++;
@@ -181,6 +242,9 @@ int main(int argc, char *argv[]) {
                         nArray[0] = 0;
                         nArray[1] = 0;
                         PutMdData(PID_VEL_CMD, Com.nIDMDT, Motor.ID, nArray);
+                        if (right_enabled_) {
+                            PutMdData(PID_VEL_CMD, right_driver_mdt_, right_driver_id_, nArray);
+                        }
 
                         byCntInitStep++;
                         break;
@@ -188,6 +252,9 @@ int main(int argc, char *argv[]) {
                     case 4: //Motor POS reset
                         nArray[0] = 0;
                         PutMdData(PID_POSI_RESET, Com.nIDMDT, Motor.ID, nArray);
+                        if (right_enabled_) {
+                            PutMdData(PID_POSI_RESET, right_driver_mdt_, right_driver_id_, nArray);
+                        }
                         byCntInitStep++;
                         break;
 

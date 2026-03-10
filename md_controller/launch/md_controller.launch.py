@@ -38,9 +38,17 @@ def generate_launch_description():
       "MDT":183,
       "Port":"/dev/ttyMotor",
       "Baudrate":57600,
-      "ID":1,
+      "ID":1,                  # Left (A) driver ID
       "GearRatio":25,
       "poles":8,
+      "left_sign":1,
+      "right_enabled":True,
+      "RightID":2,             # Right (B) driver ID
+      "RightMDT":183,
+      "RightGearRatio":25,
+      "right_sign":-1,
+      "cmd_timeout_ms":300,
+      "max_driver_rpm":3000,
       "wheel_radius": 0.103,
       "wheel_base": 0.4
     }],

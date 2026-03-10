@@ -22,8 +22,14 @@ int right_driver_id_ = 2;
 int right_driver_mdt_ = 183;
 int right_gear_ratio_ = 15;
 int right_sign_ = -1;
+bool right_use_separate_port_ = false;
+std::string right_port_ = "/dev/ttyMotorR";
+int right_baudrate_ = 57600;
 int cmd_timeout_ms_ = 300;
 int max_driver_rpm_ = 3000;
+bool right_serial_ready_ = false;
+
+serial::Serial right_ser_;
 
 std::chrono::steady_clock::time_point last_cmd_time_ = std::chrono::steady_clock::now();
 
@@ -31,6 +37,106 @@ inline int ClampRpm(int value, int max_abs) {
     if (value > max_abs) return max_abs;
     if (value < -max_abs) return -max_abs;
     return value;
+}
+
+bool InitRightSerial() {
+    try {
+        right_ser_.setPort(right_port_);
+        right_ser_.setBaudrate(right_baudrate_);
+        serial::Timeout to = serial::Timeout::simpleTimeout(1667);
+        right_ser_.setTimeout(to);
+        right_ser_.open();
+    } catch (serial::IOException& e) {
+        RCLCPP_ERROR_STREAM(
+            rclcpp::get_logger("rclcpp"),
+            "Unable to open right motor port: " << right_port_);
+        return false;
+    }
+
+    if (!right_ser_.isOpen()) {
+        RCLCPP_ERROR_STREAM(
+            rclcpp::get_logger("rclcpp"),
+            "Right motor port is not open: " << right_port_);
+        return false;
+    }
+
+    RCLCPP_INFO_STREAM(
+        rclcpp::get_logger("rclcpp"),
+        "Right serial port initialized: " << right_port_);
+    return true;
+}
+
+int PutMdDataToSerial(serial::Serial& ser, BYTE byPID, BYTE byMID, int id_num, int nArray[]) {
+    BYTE bySndBuf[MAX_PACKET_SIZE] = {0};
+    BYTE byPidDataSize = 0;
+    BYTE byDataSize = 0;
+    BYTE byTempDataSum = 0;
+
+    bySndBuf[0] = byMID;
+    bySndBuf[1] = 184;
+    bySndBuf[2] = id_num;
+    bySndBuf[3] = byPID;
+
+    switch (byPID) {
+        case PID_REQ_PID_DATA:
+            byDataSize = 1;
+            byPidDataSize = 7;
+            bySndBuf[4] = byDataSize;
+            bySndBuf[5] = static_cast<BYTE>(nArray[0]);
+            break;
+        case PID_POSI_RESET:
+            byDataSize = 1;
+            byPidDataSize = 7;
+            bySndBuf[4] = byDataSize;
+            bySndBuf[5] = static_cast<BYTE>(nArray[0]);
+            break;
+        case PID_COMMAND:
+            byDataSize = 1;
+            byPidDataSize = 7;
+            bySndBuf[4] = byDataSize;
+            bySndBuf[5] = static_cast<BYTE>(nArray[0]);
+            break;
+        case PID_VEL_CMD:
+            byDataSize = 2;
+            byPidDataSize = 8;
+            bySndBuf[4] = byDataSize;
+            bySndBuf[5] = static_cast<BYTE>(nArray[0]);
+            bySndBuf[6] = static_cast<BYTE>(nArray[1]);
+            break;
+        case PID_PNT_VEL_CMD:
+            byDataSize = 7;
+            byPidDataSize = 13;
+            bySndBuf[4] = byDataSize;
+            bySndBuf[5] = static_cast<BYTE>(nArray[0]);
+            bySndBuf[6] = static_cast<BYTE>(nArray[1]);
+            bySndBuf[7] = static_cast<BYTE>(nArray[2]);
+            bySndBuf[8] = static_cast<BYTE>(nArray[3]);
+            bySndBuf[9] = static_cast<BYTE>(nArray[4]);
+            bySndBuf[10] = static_cast<BYTE>(nArray[5]);
+            bySndBuf[11] = static_cast<BYTE>(nArray[6]);
+            break;
+        default:
+            return FAIL;
+    }
+
+    for (BYTE i = 0; i < (byPidDataSize - 1); i++) {
+        byTempDataSum += bySndBuf[i];
+    }
+    bySndBuf[byPidDataSize - 1] = static_cast<BYTE>(~(byTempDataSum) + 1);
+
+    ser.write(bySndBuf, byPidDataSize);
+    return SUCCESS;
+}
+
+int SendRightMdData(BYTE byPID, int nArray[]) {
+    if (!right_enabled_) return SUCCESS;
+
+    if (right_use_separate_port_) {
+        if (!right_serial_ready_) return FAIL;
+        return PutMdDataToSerial(right_ser_, byPID, right_driver_mdt_, right_driver_id_, nArray);
+    }
+
+    return PutMdData(byPID, right_driver_mdt_, right_driver_id_, nArray);
 }
 
 void SendSideDualChannelRpm(int mdt_id, int driver_id, int wheel_rpm, int gear_ratio, int sign) {
@@ -48,6 +154,22 @@ void SendSideDualChannelRpm(int mdt_id, int driver_id, int wheel_rpm, int gear_r
     nArray[6] = 0;
 
     PutMdData(PID_PNT_VEL_CMD, mdt_id, driver_id, nArray);
+}
+
+void SendRightSideDualChannelRpm(int wheel_rpm) {
+    int scaled_rpm = ClampRpm(wheel_rpm * right_gear_ratio_ * right_sign_, max_driver_rpm_);
+    IByte rpm_data = Short2Byte(static_cast<short>(scaled_rpm));
+    int nArray[20] = {0};
+
+    nArray[0] = 1;
+    nArray[1] = rpm_data.byLow;
+    nArray[2] = rpm_data.byHigh;
+    nArray[3] = 1;
+    nArray[4] = rpm_data.byLow;
+    nArray[5] = rpm_data.byHigh;
+    nArray[6] = 0;
+
+    SendRightMdData(PID_PNT_VEL_CMD, nArray);
 }
 
 void CmdVelCallBack(const geometry_msgs::msg::Twist::SharedPtr msg) {
@@ -84,6 +206,9 @@ int main(int argc, char *argv[]) {
     node->declare_parameter("RightMDT", 183);
     node->declare_parameter("RightGearRatio", 15);
     node->declare_parameter("right_sign", -1);
+    node->declare_parameter("RightUseSeparatePort", false);
+    node->declare_parameter("RightPort", "/dev/ttyMotorR");
+    node->declare_parameter("RightBaudrate", 57600);
     node->declare_parameter("cmd_timeout_ms", 300);
     node->declare_parameter("max_driver_rpm", 3000);
     node->declare_parameter("wheel_radius", 0.033);
@@ -102,6 +227,9 @@ int main(int argc, char *argv[]) {
     node->get_parameter("RightMDT", right_driver_mdt_);
     node->get_parameter("RightGearRatio", right_gear_ratio_);
     node->get_parameter("right_sign", right_sign_);
+    node->get_parameter("RightUseSeparatePort", right_use_separate_port_);
+    node->get_parameter("RightPort", right_port_);
+    node->get_parameter("RightBaudrate", right_baudrate_);
     node->get_parameter("cmd_timeout_ms", cmd_timeout_ms_);
     node->get_parameter("max_driver_rpm", max_driver_rpm_);
 
@@ -125,6 +253,15 @@ int main(int argc, char *argv[]) {
     Motor.last_tick   = 0;
 
     InitSerial();   //communication initialization in com.cpp
+    if (right_enabled_ && right_use_separate_port_) {
+        right_serial_ready_ = InitRightSerial();
+        if (!right_serial_ready_) {
+            RCLCPP_WARN(
+                rclcpp::get_logger("rclcpp"),
+                "Right driver disabled because right serial initialization failed.");
+            right_enabled_ = false;
+        }
+    }
     while (rclcpp::ok()) {
         
         ReceiveDataFromController(Motor.InitMotor);
@@ -187,7 +324,7 @@ int main(int argc, char *argv[]) {
 
                             // Right side driver (B)
                             if (right_enabled_) {
-                                SendSideDualChannelRpm(right_driver_mdt_, right_driver_id_, right_rpm_, right_gear_ratio_, right_sign_);
+                                SendRightSideDualChannelRpm(right_rpm_);
                             }
 
                             //n대의 모터드라이버에게 동시에 main data를 요청할 경우 data를 받을 때 데이터가 섞임을 방지.
@@ -220,7 +357,7 @@ int main(int argc, char *argv[]) {
                         nArray[0] = PID_MAIN_DATA;
                         PutMdData(PID_REQ_PID_DATA, Com.nIDMDT, Motor.ID, nArray);
                         if (right_enabled_) {
-                            PutMdData(PID_REQ_PID_DATA, right_driver_mdt_, right_driver_id_, nArray);
+                            SendRightMdData(PID_REQ_PID_DATA, nArray);
                         }
 
                         if(Motor.InitMotor == ON)
@@ -243,7 +380,7 @@ int main(int argc, char *argv[]) {
                         nArray[1] = 0;
                         PutMdData(PID_VEL_CMD, Com.nIDMDT, Motor.ID, nArray);
                         if (right_enabled_) {
-                            PutMdData(PID_VEL_CMD, right_driver_mdt_, right_driver_id_, nArray);
+                            SendRightMdData(PID_VEL_CMD, nArray);
                         }
 
                         byCntInitStep++;
@@ -253,7 +390,7 @@ int main(int argc, char *argv[]) {
                         nArray[0] = 0;
                         PutMdData(PID_POSI_RESET, Com.nIDMDT, Motor.ID, nArray);
                         if (right_enabled_) {
-                            PutMdData(PID_POSI_RESET, right_driver_mdt_, right_driver_id_, nArray);
+                            SendRightMdData(PID_POSI_RESET, nArray);
                         }
                         byCntInitStep++;
                         break;

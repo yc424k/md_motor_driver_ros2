@@ -38,8 +38,7 @@ This is a package that makes MDROBOT's motor driver available in ROS2(humble). [
 - `left_sign`, `right_sign`으로 방향 부호 보정
 - `cmd_timeout_ms` 경과 시 자동 0 RPM 정지
 
-> 중요: 현재 구현은 **단일 RS485 버스(단일 Port) + 드라이버 ID 분리** 구조 기준입니다.  
-> 즉 A/B 드라이버가 서로 다른 물리 포트(`/dev/ttyUSB0`, `/dev/ttyUSB1`)인 경우는 별도 코드 확장이 필요합니다.
+> 2포트 구성이면 `RightUseSeparatePort=True`, `RightPort=/dev/ttyUSB1` 형태로 설정해 사용할 수 있습니다.
 
 ### 💻 동작 흐름 요약
 
@@ -83,6 +82,9 @@ MD 모터 드라이버로 전송 <br>
 - `RightMDT`: 오른쪽 드라이버 target machine ID
 - `RightGearRatio`: 오른쪽 기어비
 - `right_sign`: 방향 보정 (`1` 또는 `-1`)
+- `RightUseSeparatePort`: 오른쪽 드라이버를 별도 포트로 사용할지 여부
+- `RightPort`: 오른쪽 드라이버 포트
+- `RightBaudrate`: 오른쪽 드라이버 보드레이트
 
 <img width="411" height="355" alt="Screenshot from 2025-07-30 15-39-21" src="https://github.com/user-attachments/assets/16a82fda-5027-42b9-b966-627484fb38d7" />
 
@@ -137,6 +139,7 @@ ros2 topic pub -1 /cmd_vel geometry_msgs/msg/Twist \
 
 - 직진 명령에서 한쪽이 역방향이면 `left_sign` 또는 `right_sign`를 `-1`로 변경합니다.
 - 두 드라이버가 다른 감속기/모터면 `GearRatio`와 `RightGearRatio`를 각각 맞추세요.
+- 2포트 사용 시 `RightUseSeparatePort=True`, `RightPort=/dev/ttyUSB1`로 설정합니다.
 
 5. 안전 권장사항
 

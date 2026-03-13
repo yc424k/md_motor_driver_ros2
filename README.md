@@ -38,7 +38,7 @@ This is a package that makes MDROBOT's motor driver available in ROS2(humble). [
 - `left_sign`, `right_sign`으로 방향 부호 보정
 - `cmd_timeout_ms` 경과 시 자동 0 RPM 정지
 
-> 2포트 구성이면 `RightUseSeparatePort=True`, `RightPort=/dev/ttyUSB1` 형태로 설정해 사용할 수 있습니다.
+> 2포트 구성이면 `RightUseSeparatePort=True`, `RightPort=/dev/ttyMotorRight` 형태로 설정해 사용할 수 있습니다.
 
 ### 💻 동작 흐름 요약
 
@@ -60,12 +60,15 @@ MD 모터 드라이버로 전송 <br>
 
 ### 공통 파라미터
 
-- `Port`: 직렬 포트 (기본 `/dev/ttyMotor`)
+- `Port`: 왼쪽(A) 드라이버 직렬 포트 (기본 `/dev/ttyMotorLeft`)
 - `Baudrate`: 보드레이트 (기본 `57600`)
 - `wheel_radius`: 바퀴 반지름(m)
 - `wheel_base`: 좌우 바퀴 간 거리(m)
 - `cmd_timeout_ms`: `cmd_vel` timeout 시 정지 시간(ms)
 - `max_driver_rpm`: 드라이버 명령 rpm 제한
+- `publish_odom_tf`: `odom -> base_link` TF publish 여부
+- `odom_frame_id`: odom 프레임 이름 (기본 `odom`)
+- `base_frame_id`: 베이스 프레임 이름 (기본 `base_link`)
 
 ### 왼쪽(A) 드라이버 파라미터
 
@@ -83,7 +86,7 @@ MD 모터 드라이버로 전송 <br>
 - `RightGearRatio`: 오른쪽 기어비
 - `right_sign`: 방향 보정 (`1` 또는 `-1`)
 - `RightUseSeparatePort`: 오른쪽 드라이버를 별도 포트로 사용할지 여부
-- `RightPort`: 오른쪽 드라이버 포트
+- `RightPort`: 오른쪽 드라이버 포트 (기본 `/dev/ttyMotorRight`)
 - `RightBaudrate`: 오른쪽 드라이버 보드레이트
 
 <img width="411" height="355" alt="Screenshot from 2025-07-30 15-39-21" src="https://github.com/user-attachments/assets/16a82fda-5027-42b9-b966-627484fb38d7" />
@@ -110,20 +113,29 @@ To install it, follow the steps below.
 
 ## 🚀 실행방법
 
-1. 모터 드라이버 런치 실행
+1. 모터 드라이버 패키지 빌드
+
+```bash
+cd ~/ros2_ws
+source /opt/ros/humble/setup.bash
+colcon build --packages-select md_controller md_teleop
+source ~/ros2_ws/install/setup.bash
+```
+
+2. 모터 드라이버 런치 실행
 
 ```bash
 ros2 launch md_controller md_controller.launch.py use_rviz:=False
 ```
 
-2. (option) 키보드 teleop 테스트
+3. (option) 키보드 teleop 테스트
 > 단순히 `/cmd_vel`을 인가해 동작 확인할 때 사용합니다.
 
 ```bash
 ros2 run md_teleop md_teleop_key_node
 ```
 
-3. `/cmd_vel` 직접 발행 테스트 (저속 권장)
+4. `/cmd_vel` 직접 발행 테스트 (저속 권장)
 
 ```bash
 # very slow straight
@@ -135,13 +147,13 @@ ros2 topic pub -1 /cmd_vel geometry_msgs/msg/Twist \
 "{linear: {x: 0.0, y: 0.0, z: 0.0}, angular: {x: 0.0, y: 0.0, z: 0.2}}"
 ```
 
-4. 방향 부호(sign) 보정
+5. 방향 부호(sign) 보정
 
 - 직진 명령에서 한쪽이 역방향이면 `left_sign` 또는 `right_sign`를 `-1`로 변경합니다.
 - 두 드라이버가 다른 감속기/모터면 `GearRatio`와 `RightGearRatio`를 각각 맞추세요.
-- 2포트 사용 시 `RightUseSeparatePort=True`, `RightPort=/dev/ttyUSB1`로 설정합니다.
+- 2포트 사용 시 `RightUseSeparatePort=True`, `RightPort=/dev/ttyMotorRight`로 설정합니다.
 
-5. 안전 권장사항
+6. 안전 권장사항
 
 - 처음에는 바퀴를 공중에 띄운 상태에서 테스트
 - 저속에서 직진/회전/정지부터 확인
@@ -155,3 +167,4 @@ ros2 topic pub -1 /cmd_vel geometry_msgs/msg/Twist \
 |-----------------|-----------|----------------------------------------------|-------------------------------------------|
 | JungHo Cheon    | [c-jho](https://github.com/c-jho) | Korea Institute of Science and Technology | 원본 코드 작성 및 ROS2 포팅 기반 제공      |
 | Seokgwon Lee    | [Lee-seokgwon](https://github.com/Lee-seokgwon)         | Kyungpook National Univ. (SEE)              | 듀얼채널 모터 드라이버 로직 추가 및 기능 확장 |
+| YuCheong Kim    | [yc424k](https://github.com/yc424k) | Soonchunhyang Univ                            | 4AWD 2포트 파라미터 정리, 엔코더 기반 `/odom` 및 `odom->base_link` TF 추가, 포트 오픈 에러 로그 개선 |

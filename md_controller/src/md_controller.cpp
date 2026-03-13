@@ -360,7 +360,7 @@ int main(int argc, char *argv[]) {
     node->declare_parameter("cmd_timeout_ms", 300);
     node->declare_parameter("max_driver_rpm", 3000);
     node->declare_parameter("wheel_radius", 0.103);
-    node->declare_parameter("wheel_base", 0.4);
+    node->declare_parameter("wheel_base", 0.164);
     node->declare_parameter("publish_odom_tf", true);
     node->declare_parameter("odom_frame_id", "odom");
     node->declare_parameter("base_frame_id", "base_link");

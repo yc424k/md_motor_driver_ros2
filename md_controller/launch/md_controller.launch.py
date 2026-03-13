@@ -53,7 +53,7 @@ def generate_launch_description():
       "cmd_timeout_ms":300,
       "max_driver_rpm":3000,
       "wheel_radius": 0.103,
-      "wheel_base": 0.4,
+      "wheel_base": 0.164,
       "publish_odom_tf": True,
       "odom_frame_id": "odom",
       "base_frame_id": "base_link"

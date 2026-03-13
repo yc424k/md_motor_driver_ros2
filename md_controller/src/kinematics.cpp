@@ -6,7 +6,7 @@
 #endif
 
 float wheel_radius = 0.103;  // default 바퀴 반지름 (m)  
-float wheel_base = 0.164;   // default 좌우 바퀴 간격 (m)
+float wheel_base = 0.160;   // default 좌우 바퀴 간격 (m)
 
 void setRobotParams(float radius, float base)
 {

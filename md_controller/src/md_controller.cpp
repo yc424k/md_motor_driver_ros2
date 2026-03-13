@@ -87,6 +87,7 @@ struct SerialPacketParser {
 SerialPacketParser right_parser_;
 bool right_feedback_valid_ = false;
 int32_t right_feedback_ticks_ = 0;
+bool right_motor_init_logged_ = false;
 
 bool encoder_odom_initialized_ = false;
 int32_t last_left_ticks_ = 0;
@@ -182,6 +183,13 @@ void ProcessRightPacket(const BYTE* packet) {
     }
     if (packet_id != static_cast<BYTE>(right_driver_id_)) {
         return;
+    }
+
+    if (right_enabled_ && !right_motor_init_logged_) {
+        RCLCPP_INFO(
+            rclcpp::get_logger("rclcpp"),
+            "Right Motor Init success! (ID %d)", right_driver_id_);
+        right_motor_init_logged_ = true;
     }
 
     right_feedback_ticks_ = static_cast<int32_t>(

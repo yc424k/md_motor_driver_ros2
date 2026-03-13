@@ -333,7 +333,7 @@ int ReceiveDataFromController(BYTE init) //Analyze the communication data
         // for(int k = 0; k < 23; k++) printf("%d ", byRcvBuf[k]); cout << endl;
         if(init == ON){
             if(byRcvBuf[2] == Motor.ID){
-                RCLCPP_INFO(rclcpp::get_logger("rclcpp"), "ID %d Motor Init success!", Motor.ID);
+                RCLCPP_INFO(rclcpp::get_logger("rclcpp"), "Left Motor Init success! (ID %d)", Motor.ID);
                 Motor.InitMotor=OFF;
             }
         }

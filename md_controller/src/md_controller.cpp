@@ -9,6 +9,7 @@
 
 #include "geometry_msgs/msg/twist.hpp"
 #include "nav_msgs/msg/odometry.hpp"
+#include "sensor_msgs/msg/imu.hpp"
 
 Communication Com;  
 MotorVar Motor;
@@ -51,6 +52,16 @@ double odom_yaw_ = 0.0;
 serial::Serial right_ser_;
 
 std::chrono::steady_clock::time_point last_cmd_time_ = std::chrono::steady_clock::now();
+std::chrono::steady_clock::time_point last_imu_steady_time_ = std::chrono::steady_clock::time_point::min();
+bool imu_received_ = false;
+double imu_gyro_z_filtered_ = 0.0;
+
+bool use_imu_yaw_correction_ = false;
+std::string imu_topic_ = "/camera/camera/imu";
+double imu_yaw_weight_ = 0.7;
+double imu_yaw_rate_gain_ = 1.0;
+double imu_lowpass_alpha_ = 0.2;
+double imu_timeout_sec_ = 0.2;
 
 inline int ClampRpm(int value, int max_abs) {
     if (value > max_abs) return max_abs;
@@ -352,6 +363,20 @@ void CmdVelCallBack(const geometry_msgs::msg::Twist::SharedPtr msg) {
     SendCmdRpm = ON;
 }
 
+void ImuCallback(const sensor_msgs::msg::Imu::SharedPtr msg) {
+    const double gyro_z = msg->angular_velocity.z * imu_yaw_rate_gain_;
+
+    if (!imu_received_) {
+        imu_gyro_z_filtered_ = gyro_z;
+    } else {
+        imu_gyro_z_filtered_ =
+            (imu_lowpass_alpha_ * gyro_z) + ((1.0 - imu_lowpass_alpha_) * imu_gyro_z_filtered_);
+    }
+
+    imu_received_ = true;
+    last_imu_steady_time_ = std::chrono::steady_clock::now();
+}
+
 int main(int argc, char *argv[]) {
     rclcpp::init(argc, argv);
     auto node = std::make_shared<rclcpp::Node>("md_controller_node");
@@ -363,6 +388,7 @@ int main(int argc, char *argv[]) {
 
     //subscriber
     auto cmd_vel_sub = node->create_subscription<geometry_msgs::msg::Twist>("/cmd_vel", 10, CmdVelCallBack);
+    (void)cmd_vel_sub;
 
     //Motor driver settup-------------------------------------------------------------------------------
     node->declare_parameter("MDUI", 184);
@@ -393,6 +419,12 @@ int main(int argc, char *argv[]) {
     node->declare_parameter("max_driver_rpm", 3000);
     node->declare_parameter("wheel_radius", 0.103);
     node->declare_parameter("wheel_base", 0.160);
+    node->declare_parameter("use_imu_yaw_correction", false);
+    node->declare_parameter("imu_topic", "/camera/camera/imu");
+    node->declare_parameter("imu_yaw_weight", 0.7);
+    node->declare_parameter("imu_yaw_rate_gain", 1.0);
+    node->declare_parameter("imu_lowpass_alpha", 0.2);
+    node->declare_parameter("imu_timeout_sec", 0.2);
     node->declare_parameter("publish_odom_tf", true);
     node->declare_parameter("odom_frame_id", "odom");
     node->declare_parameter("base_frame_id", "base_link");
@@ -423,9 +455,22 @@ int main(int argc, char *argv[]) {
     node->get_parameter("RightBaudrate", right_baudrate_);
     node->get_parameter("cmd_timeout_ms", cmd_timeout_ms_);
     node->get_parameter("max_driver_rpm", max_driver_rpm_);
+    node->get_parameter("use_imu_yaw_correction", use_imu_yaw_correction_);
+    node->get_parameter("imu_topic", imu_topic_);
+    node->get_parameter("imu_yaw_weight", imu_yaw_weight_);
+    node->get_parameter("imu_yaw_rate_gain", imu_yaw_rate_gain_);
+    node->get_parameter("imu_lowpass_alpha", imu_lowpass_alpha_);
+    node->get_parameter("imu_timeout_sec", imu_timeout_sec_);
     node->get_parameter("publish_odom_tf", publish_odom_tf_);
     node->get_parameter("odom_frame_id", odom_frame_id_);
     node->get_parameter("base_frame_id", base_frame_id_);
+
+    imu_yaw_weight_ = std::clamp(imu_yaw_weight_, 0.0, 1.0);
+    imu_lowpass_alpha_ = std::clamp(imu_lowpass_alpha_, 0.0, 1.0);
+    imu_timeout_sec_ = std::max(0.0, imu_timeout_sec_);
+
+    auto imu_sub = node->create_subscription<sensor_msgs::msg::Imu>(imu_topic_, 50, ImuCallback);
+    (void)imu_sub;
 
     //Robot Param load for kinematics.cpp
     float wheel_radius_param, wheel_base_param;
@@ -492,6 +537,10 @@ int main(int argc, char *argv[]) {
                     double angular_z = 0.0;
 
                     if (left_feedback_valid && right_feedback_available) {
+                        const bool imu_fresh = imu_received_
+                            && (std::chrono::duration_cast<std::chrono::duration<double>>(
+                                std::chrono::steady_clock::now() - last_imu_steady_time_).count() <= imu_timeout_sec_);
+
                         const int32_t right_ticks =
                             right_enabled_ ? right_feedback_ticks_ : left_feedback_ticks;
 
@@ -518,9 +567,15 @@ int main(int argc, char *argv[]) {
                             static_cast<double>(delta_right_ticks) * right_tick_to_rad_ * wheel_radius * right_odom_gain_;
 
                         const double delta_s = 0.5 * (left_distance + right_distance);
-                        const double delta_yaw = (wheel_base > 1e-6)
+                        const double delta_yaw_enc = (wheel_base > 1e-6)
                             ? ((right_distance - left_distance) / wheel_base)
                             : 0.0;
+                        double delta_yaw = delta_yaw_enc;
+                        if (use_imu_yaw_correction_ && imu_fresh && dt > 1e-6) {
+                            const double delta_yaw_imu = imu_gyro_z_filtered_ * dt;
+                            delta_yaw =
+                                ((1.0 - imu_yaw_weight_) * delta_yaw_enc) + (imu_yaw_weight_ * delta_yaw_imu);
+                        }
 
                         odom_x_ += delta_s * std::cos(odom_yaw_ + 0.5 * delta_yaw);
                         odom_y_ += delta_s * std::sin(odom_yaw_ + 0.5 * delta_yaw);
@@ -532,6 +587,9 @@ int main(int argc, char *argv[]) {
                         }
                     } else {
                         // Fallback: integrate cmd-based wheel speeds when feedback is not ready.
+                        const bool imu_fresh = imu_received_
+                            && (std::chrono::duration_cast<std::chrono::duration<double>>(
+                                std::chrono::steady_clock::now() - last_imu_steady_time_).count() <= imu_timeout_sec_);
                         const int left_cmd_rpm = ApplyRpmGain(left_rpm_, left_cmd_gain_);
                         const int right_cmd_rpm = ApplyRpmGain(right_rpm_, right_cmd_gain_);
                         const double left_wheel_mps =
@@ -544,6 +602,10 @@ int main(int argc, char *argv[]) {
                         angular_z = (wheel_base > 1e-6)
                             ? ((right_wheel_mps - left_wheel_mps) / wheel_base)
                             : 0.0;
+                        if (use_imu_yaw_correction_ && imu_fresh) {
+                            angular_z =
+                                ((1.0 - imu_yaw_weight_) * angular_z) + (imu_yaw_weight_ * imu_gyro_z_filtered_);
+                        }
 
                         odom_x_ += linear_x * std::cos(odom_yaw_) * dt;
                         odom_y_ += linear_x * std::sin(odom_yaw_) * dt;

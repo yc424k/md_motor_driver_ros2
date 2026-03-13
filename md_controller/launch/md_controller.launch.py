@@ -62,6 +62,12 @@ def generate_launch_description():
       "max_driver_rpm":3000,
       "wheel_radius": 0.103,
       "wheel_base": 0.160,
+      "use_imu_yaw_correction": True,
+      "imu_topic": "/camera/camera/imu",
+      "imu_yaw_weight": 0.7,
+      "imu_yaw_rate_gain": 1.0,
+      "imu_lowpass_alpha": 0.2,
+      "imu_timeout_sec": 0.2,
       "publish_odom_tf": True,
       "odom_frame_id": "odom",
       "base_frame_id": "base_link"

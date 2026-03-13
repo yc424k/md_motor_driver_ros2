@@ -3,8 +3,12 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdint>
+#include <cmath>
+#include <vector>
 
 #include "geometry_msgs/msg/twist.hpp"
+#include "nav_msgs/msg/odometry.hpp"
 
 Communication Com;  
 MotorVar Motor;
@@ -18,16 +22,23 @@ int right_rpm_ = 0;
 
 int left_sign_ = 1;
 bool right_enabled_ = true;
-int right_driver_id_ = 2;
+int right_driver_id_ = 1;
 int right_driver_mdt_ = 183;
-int right_gear_ratio_ = 15;
-int right_sign_ = -1;
-bool right_use_separate_port_ = false;
-std::string right_port_ = "/dev/ttyMotorR";
+int right_gear_ratio_ = 25;
+int right_sign_ = 1;
+bool right_use_separate_port_ = true;
+std::string right_port_ = "/dev/ttyMotorRight";
 int right_baudrate_ = 57600;
 int cmd_timeout_ms_ = 300;
 int max_driver_rpm_ = 3000;
 bool right_serial_ready_ = false;
+bool publish_odom_tf_ = true;
+std::string odom_frame_id_ = "odom";
+std::string base_frame_id_ = "base_link";
+
+double odom_x_ = 0.0;
+double odom_y_ = 0.0;
+double odom_yaw_ = 0.0;
 
 serial::Serial right_ser_;
 
@@ -37,6 +48,142 @@ inline int ClampRpm(int value, int max_abs) {
     if (value > max_abs) return max_abs;
     if (value < -max_abs) return -max_abs;
     return value;
+}
+
+struct SerialPacketParser {
+    BYTE buf[MAX_PACKET_SIZE] = {0};
+    BYTE step = 0;
+    BYTE packet_num = 0;
+    BYTE max_data_num = 0;
+    BYTE data_num = 0;
+    BYTE chk_sum = 0;
+    BYTE chk_com_error = 0;
+    BYTE sync_count = 0;
+};
+
+SerialPacketParser right_parser_;
+bool right_feedback_valid_ = false;
+int32_t right_feedback_ticks_ = 0;
+
+bool encoder_odom_initialized_ = false;
+int32_t last_left_ticks_ = 0;
+int32_t last_right_ticks_ = 0;
+double left_tick_to_rad_ = 0.0;
+double right_tick_to_rad_ = 0.0;
+
+void ResetParser(SerialPacketParser& parser) {
+    parser.step = 0;
+    parser.packet_num = 0;
+    parser.max_data_num = 0;
+    parser.data_num = 0;
+    parser.chk_sum = 0;
+    parser.sync_count = 0;
+}
+
+bool FeedParserByte(SerialPacketParser& parser, BYTE value) {
+    if (parser.packet_num >= MAX_PACKET_SIZE) {
+        ResetParser(parser);
+        return false;
+    }
+
+    switch (parser.step) {
+        case 0:
+            if ((value == 184) || (value == 183)) {
+                parser.chk_sum += value;
+                parser.buf[parser.packet_num++] = value;
+                parser.chk_com_error = 0;
+                parser.sync_count++;
+                if (parser.sync_count == 2) {
+                    parser.sync_count = 0;
+                    parser.step = 1;
+                }
+            } else {
+                parser.chk_com_error++;
+                ResetParser(parser);
+            }
+            break;
+        case 1:
+            if (value >= 1 && value <= 254) {
+                parser.chk_sum += value;
+                parser.buf[parser.packet_num++] = value;
+                parser.step = 2;
+                parser.chk_com_error = 0;
+            } else {
+                parser.chk_com_error++;
+                ResetParser(parser);
+            }
+            break;
+        case 2:
+            parser.chk_sum += value;
+            parser.buf[parser.packet_num++] = value;
+            parser.step = 3;
+            break;
+        case 3:
+            parser.max_data_num = value;
+            parser.data_num = 0;
+            parser.chk_sum += value;
+            parser.buf[parser.packet_num++] = value;
+            parser.step = 4;
+            break;
+        case 4:
+            parser.buf[parser.packet_num++] = value;
+            parser.chk_sum += value;
+            if (++parser.data_num >= MAX_DATA_SIZE) {
+                ResetParser(parser);
+                return false;
+            }
+            if (parser.data_num >= parser.max_data_num) {
+                parser.step = 5;
+            }
+            break;
+        case 5: {
+            parser.chk_sum += value;
+            parser.buf[parser.packet_num++] = value;
+            const bool packet_ok = (parser.chk_sum == 0);
+            ResetParser(parser);
+            return packet_ok;
+        }
+        default:
+            ResetParser(parser);
+            break;
+    }
+
+    return false;
+}
+
+void ProcessRightPacket(const BYTE* packet) {
+    const BYTE packet_id = packet[2];
+    const BYTE packet_pid = packet[3];
+    if (packet_pid != PID_MAIN_DATA) {
+        return;
+    }
+    if (packet_id != static_cast<BYTE>(right_driver_id_)) {
+        return;
+    }
+
+    right_feedback_ticks_ = static_cast<int32_t>(
+        Byte2LInt(packet[15], packet[16], packet[17], packet[18]));
+    right_feedback_valid_ = true;
+}
+
+void ReceiveRightDataFromController() {
+    if (!right_enabled_ || !right_use_separate_port_ || !right_serial_ready_) {
+        return;
+    }
+
+    const size_t available = right_ser_.available();
+    if (available == 0) {
+        return;
+    }
+
+    std::vector<BYTE> rx_buffer(available);
+    const size_t read_len = right_ser_.read(rx_buffer, available);
+
+    for (size_t i = 0; i < read_len; ++i) {
+        if (FeedParserByte(right_parser_, rx_buffer[i])) {
+            ProcessRightPacket(right_parser_.buf);
+        }
+    }
 }
 
 bool InitRightSerial() {
@@ -185,9 +332,10 @@ int main(int argc, char *argv[]) {
     rclcpp::init(argc, argv);
     auto node = std::make_shared<rclcpp::Node>("md_controller_node");
 
-    // create TF
-    rclcpp::Time stamp_now;
+    // create TF / odom publisher
     tf2_ros::TransformBroadcaster tf_broadcaster_(node);
+    auto odom_pub = node->create_publisher<nav_msgs::msg::Odometry>("/odom", 20);
+    auto last_odom_time = node->now();
 
     //subscriber
     auto cmd_vel_sub = node->create_subscription<geometry_msgs::msg::Twist>("/cmd_vel", 10, CmdVelCallBack);
@@ -195,24 +343,27 @@ int main(int argc, char *argv[]) {
     //Motor driver settup-------------------------------------------------------------------------------
     node->declare_parameter("MDUI", 184);
     node->declare_parameter("MDT", 183);
-    node->declare_parameter("Port", "/dev/ttyMotor");
+    node->declare_parameter("Port", "/dev/ttyMotorLeft");
     node->declare_parameter("Baudrate", 57600);
     node->declare_parameter("ID", 1); //fix
-    node->declare_parameter("GearRatio", 15);
-    node->declare_parameter("poles", 10);
+    node->declare_parameter("GearRatio", 25);
+    node->declare_parameter("poles", 8);
     node->declare_parameter("left_sign", 1);
     node->declare_parameter("right_enabled", true);
-    node->declare_parameter("RightID", 2);
+    node->declare_parameter("RightID", 1);
     node->declare_parameter("RightMDT", 183);
-    node->declare_parameter("RightGearRatio", 15);
-    node->declare_parameter("right_sign", -1);
-    node->declare_parameter("RightUseSeparatePort", false);
-    node->declare_parameter("RightPort", "/dev/ttyMotorR");
+    node->declare_parameter("RightGearRatio", 25);
+    node->declare_parameter("right_sign", 1);
+    node->declare_parameter("RightUseSeparatePort", true);
+    node->declare_parameter("RightPort", "/dev/ttyMotorRight");
     node->declare_parameter("RightBaudrate", 57600);
     node->declare_parameter("cmd_timeout_ms", 300);
     node->declare_parameter("max_driver_rpm", 3000);
-    node->declare_parameter("wheel_radius", 0.033);
-    node->declare_parameter("wheel_base", 0.16);
+    node->declare_parameter("wheel_radius", 0.103);
+    node->declare_parameter("wheel_base", 0.4);
+    node->declare_parameter("publish_odom_tf", true);
+    node->declare_parameter("odom_frame_id", "odom");
+    node->declare_parameter("base_frame_id", "base_link");
 
     node->get_parameter("MDUI", Com.nIDMDUI);
     node->get_parameter("MDT", Com.nIDMDT);
@@ -232,6 +383,9 @@ int main(int argc, char *argv[]) {
     node->get_parameter("RightBaudrate", right_baudrate_);
     node->get_parameter("cmd_timeout_ms", cmd_timeout_ms_);
     node->get_parameter("max_driver_rpm", max_driver_rpm_);
+    node->get_parameter("publish_odom_tf", publish_odom_tf_);
+    node->get_parameter("odom_frame_id", odom_frame_id_);
+    node->get_parameter("base_frame_id", base_frame_id_);
 
     //Robot Param load for kinematics.cpp
     float wheel_radius_param, wheel_base_param;
@@ -241,6 +395,9 @@ int main(int argc, char *argv[]) {
 
     Motor.PPR       = Motor.poles*3*Motor.GearRatio;           //poles * 3(HALL U,V,W) * gear ratio
     Motor.Tick2RAD  = (360.0/Motor.PPR)*PI / 180;
+    left_tick_to_rad_ = Motor.Tick2RAD;
+    const double right_ppr = std::max(1, Motor.poles * 3 * right_gear_ratio_);
+    right_tick_to_rad_ = (360.0 / right_ppr) * PI / 180.0;
 
     int nArray[20];
     static BYTE fgInitsetting, byCntInitStep, byCntComStep, byCnt2500us, byCntStartDelay, byCntCase[5];
@@ -265,6 +422,7 @@ int main(int argc, char *argv[]) {
     while (rclcpp::ok()) {
         
         ReceiveDataFromController(Motor.InitMotor);
+        ReceiveRightDataFromController();
         if(++byCnt2500us == 50)
         {
             byCnt2500us = 0;
@@ -273,32 +431,113 @@ int main(int argc, char *argv[]) {
             {
                 switch(++byCntComStep)
                 {
-                case 1:{ //create tf & update motor position //maybe not needed. change this logic to get odom
-                    geometry_msgs::msg::TransformStamped transformStamped;
-                    transformStamped.header.stamp = node->now();
-                    transformStamped.header.frame_id = "world";
-                    transformStamped.child_frame_id = "motor_joint";
+                case 1:{ // publish /odom and odom->base_link TF
+                    const auto now = node->now();
+                    double dt = (now - last_odom_time).seconds();
+                    if (dt < 0.0) {
+                        dt = 0.0;
+                    } else if (dt > 0.5) {
+                        // Ignore abnormally large dt to avoid odom jumps after pauses.
+                        dt = 0.0;
+                    }
+                    last_odom_time = now;
 
-                    transformStamped.transform.translation.x = 0.0;
-                    transformStamped.transform.translation.y = 0.0;
-                    transformStamped.transform.translation.z = 0.15;
+                    // Left feedback is parsed by com.cpp and stored in Com.
+                    const int32_t left_feedback_ticks = static_cast<int32_t>(Com.position);
+                    const bool left_feedback_valid = (Motor.InitMotor == OFF);
+                    const bool right_feedback_available =
+                        (!right_enabled_) || (right_use_separate_port_ && right_feedback_valid_);
 
-                    Motor.current_tick     = Com.position;
+                    double linear_x = 0.0;
+                    double angular_z = 0.0;
 
-                    Motor.last_diff_tick   = Motor.current_tick - Motor.last_tick;
-                    Motor.last_tick        = Motor.current_tick;
-                    Motor.last_rad        += Motor.Tick2RAD * (double)Motor.last_diff_tick;
-                    // printf("%f\n", Motor.Tick2RAD);
+                    if (left_feedback_valid && right_feedback_available) {
+                        const int32_t right_ticks =
+                            right_enabled_ ? right_feedback_ticks_ : left_feedback_ticks;
+
+                        if (!encoder_odom_initialized_) {
+                            last_left_ticks_ = left_feedback_ticks;
+                            last_right_ticks_ = right_ticks;
+                            encoder_odom_initialized_ = true;
+                            break;
+                        }
+
+                        const int32_t delta_left_ticks = left_feedback_ticks - last_left_ticks_;
+                        const int32_t delta_right_ticks = right_ticks - last_right_ticks_;
+                        last_left_ticks_ = left_feedback_ticks;
+                        last_right_ticks_ = right_ticks;
+
+                        // Ignore abnormal jumps (e.g. reconnect/reset) and re-sync.
+                        if (std::abs(delta_left_ticks) > 200000 || std::abs(delta_right_ticks) > 200000) {
+                            break;
+                        }
+
+                        const double left_distance = static_cast<double>(delta_left_ticks) * left_tick_to_rad_ * wheel_radius;
+                        const double right_distance = static_cast<double>(delta_right_ticks) * right_tick_to_rad_ * wheel_radius;
+
+                        const double delta_s = 0.5 * (left_distance + right_distance);
+                        const double delta_yaw = (wheel_base > 1e-6)
+                            ? ((right_distance - left_distance) / wheel_base)
+                            : 0.0;
+
+                        odom_x_ += delta_s * std::cos(odom_yaw_ + 0.5 * delta_yaw);
+                        odom_y_ += delta_s * std::sin(odom_yaw_ + 0.5 * delta_yaw);
+                        odom_yaw_ += delta_yaw;
+
+                        if (dt > 1e-6) {
+                            linear_x = delta_s / dt;
+                            angular_z = delta_yaw / dt;
+                        }
+                    } else {
+                        // Fallback: integrate cmd-based wheel speeds when feedback is not ready.
+                        const double left_wheel_mps =
+                            (static_cast<double>(left_rpm_) * 2.0 * PI * wheel_radius) / 60.0;
+                        const double right_wheel_mps = right_enabled_
+                            ? (static_cast<double>(right_rpm_) * 2.0 * PI * wheel_radius) / 60.0
+                            : left_wheel_mps;
+
+                        linear_x = 0.5 * (left_wheel_mps + right_wheel_mps);
+                        angular_z = (wheel_base > 1e-6)
+                            ? ((right_wheel_mps - left_wheel_mps) / wheel_base)
+                            : 0.0;
+
+                        odom_x_ += linear_x * std::cos(odom_yaw_) * dt;
+                        odom_y_ += linear_x * std::sin(odom_yaw_) * dt;
+                        odom_yaw_ += angular_z * dt;
+                    }
 
                     tf2::Quaternion q;
-                    q.setRPY(0, 0, -Motor.last_rad);
-                    transformStamped.transform.rotation.x = q.x();
-                    transformStamped.transform.rotation.y = q.y();
-                    transformStamped.transform.rotation.z = q.z();
-                    transformStamped.transform.rotation.w = q.w();
+                    q.setRPY(0.0, 0.0, odom_yaw_);
 
-                    tf_broadcaster_.sendTransform(transformStamped);
-                    auto end = std::chrono::high_resolution_clock::now();
+                    nav_msgs::msg::Odometry odom_msg;
+                    odom_msg.header.stamp = now;
+                    odom_msg.header.frame_id = odom_frame_id_;
+                    odom_msg.child_frame_id = base_frame_id_;
+                    odom_msg.pose.pose.position.x = odom_x_;
+                    odom_msg.pose.pose.position.y = odom_y_;
+                    odom_msg.pose.pose.position.z = 0.0;
+                    odom_msg.pose.pose.orientation.x = q.x();
+                    odom_msg.pose.pose.orientation.y = q.y();
+                    odom_msg.pose.pose.orientation.z = q.z();
+                    odom_msg.pose.pose.orientation.w = q.w();
+                    odom_msg.twist.twist.linear.x = linear_x;
+                    odom_msg.twist.twist.angular.z = angular_z;
+                    odom_pub->publish(odom_msg);
+
+                    if (publish_odom_tf_) {
+                        geometry_msgs::msg::TransformStamped odom_tf_msg;
+                        odom_tf_msg.header.stamp = now;
+                        odom_tf_msg.header.frame_id = odom_frame_id_;
+                        odom_tf_msg.child_frame_id = base_frame_id_;
+                        odom_tf_msg.transform.translation.x = odom_x_;
+                        odom_tf_msg.transform.translation.y = odom_y_;
+                        odom_tf_msg.transform.translation.z = 0.0;
+                        odom_tf_msg.transform.rotation.x = q.x();
+                        odom_tf_msg.transform.rotation.y = q.y();
+                        odom_tf_msg.transform.rotation.z = q.z();
+                        odom_tf_msg.transform.rotation.w = q.w();
+                        tf_broadcaster_.sendTransform(odom_tf_msg);
+                    }
                     break;
                 }
                 case 2: //Control motor & request motor info
@@ -330,6 +569,9 @@ int main(int argc, char *argv[]) {
                             //n대의 모터드라이버에게 동시에 main data를 요청할 경우 data를 받을 때 데이터가 섞임을 방지.
                             nArray[0] = PID_MAIN_DATA;
                             PutMdData(PID_REQ_PID_DATA, Com.nIDMDT, Motor.ID, nArray);  // Main data request
+                            if (right_enabled_) {
+                                SendRightMdData(PID_REQ_PID_DATA, nArray);                // Right main data request
+                            }
 
                             SendCmdRpm = OFF;
                         }
@@ -338,6 +580,9 @@ int main(int argc, char *argv[]) {
                             //n대의 모터드라이버에게 동시에 main data를 요청할 경우 data를 받을 때 데이터가 섞임을 방지.
                             nArray[0] = PID_MAIN_DATA;
                             PutMdData(PID_REQ_PID_DATA, Com.nIDMDT, Motor.ID, nArray);  // Main data request
+                            if (right_enabled_) {
+                                SendRightMdData(PID_REQ_PID_DATA, nArray);                // Right main data request
+                            }
                             //------------------------------------------------------------------
                         }
                         
@@ -392,6 +637,7 @@ int main(int argc, char *argv[]) {
                         if (right_enabled_) {
                             SendRightMdData(PID_POSI_RESET, nArray);
                         }
+                        encoder_odom_initialized_ = false;
                         byCntInitStep++;
                         break;
 

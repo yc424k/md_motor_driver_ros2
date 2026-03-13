@@ -15,6 +15,7 @@
   <depend>serial</depend>
   <depend>tf2_ros</depend>
   <depend>sensor_msgs</depend>
+  <depend>nav_msgs</depend>
 
   <build_depend>tf2</build_depend>
   <exec_depend>tf2</exec_depend>

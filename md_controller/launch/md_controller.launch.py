@@ -36,24 +36,27 @@ def generate_launch_description():
     parameters=[{
       "MDUI":184,
       "MDT":183,
-      "Port":"/dev/ttyMotor",
+      "Port":"/dev/ttyMotorLeft",
       "Baudrate":57600,
       "ID":1,                  # Left (A) driver ID
       "GearRatio":25,
       "poles":8,
       "left_sign":1,
       "right_enabled":True,
-      "RightID":2,             # Right (B) driver ID
+      "RightID":1,             # Right (B) driver ID (separate port, same ID allowed)
       "RightMDT":183,
       "RightGearRatio":25,
-      "right_sign":-1,
-      "RightUseSeparatePort":False,
-      "RightPort":"/dev/ttyMotorR",
+      "right_sign":1,
+      "RightUseSeparatePort":True,
+      "RightPort":"/dev/ttyMotorRight",
       "RightBaudrate":57600,
       "cmd_timeout_ms":300,
       "max_driver_rpm":3000,
       "wheel_radius": 0.103,
-      "wheel_base": 0.4
+      "wheel_base": 0.4,
+      "publish_odom_tf": True,
+      "odom_frame_id": "odom",
+      "base_frame_id": "base_link"
     }],
     output='screen'
   )

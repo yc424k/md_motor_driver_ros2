@@ -14,6 +14,7 @@ find_package(serial REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(tf2 REQUIRED)
 find_package(sensor_msgs REQUIRED)
+find_package(nav_msgs REQUIRED)
 
 include_directories(${serial_INCLUDE_DIRS})
 include_directories(include)
@@ -31,7 +32,17 @@ install(
 )
 
 add_executable(md_controller src/md_controller.cpp src/com.cpp src/kinematics.cpp)
-ament_target_dependencies(md_controller rclcpp std_msgs serial geometry_msgs tf2_ros tf2 sensor_msgs)
+ament_target_dependencies(
+  md_controller
+  rclcpp
+  std_msgs
+  serial
+  geometry_msgs
+  tf2_ros
+  tf2
+  sensor_msgs
+  nav_msgs
+)
 install(TARGETS
   md_controller
   DESTINATION lib/${PROJECT_NAME})

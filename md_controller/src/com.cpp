@@ -37,7 +37,9 @@ int InitSerial(void)
     }
     catch (serial::IOException& e)
     {
-        RCLCPP_ERROR_STREAM(rclcpp::get_logger("rclcpp"),"Unable to open port ");
+        RCLCPP_ERROR_STREAM(
+            rclcpp::get_logger("rclcpp"),
+            "Unable to open port: " << Com.nPort << " (" << e.what() << ")");
         return -1;
     }
     if(ser.isOpen())

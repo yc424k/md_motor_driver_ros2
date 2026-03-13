@@ -21,11 +21,19 @@ int left_rpm_ = 0;
 int right_rpm_ = 0;
 
 int left_sign_ = 1;
+double left_cmd_gain_ = 1.0;
+double left_odom_gain_ = 1.0;
+double left_front_cmd_gain_ = 1.0;
+double left_rear_cmd_gain_ = 1.0;
 bool right_enabled_ = true;
 int right_driver_id_ = 1;
 int right_driver_mdt_ = 183;
 int right_gear_ratio_ = 25;
 int right_sign_ = 1;
+double right_cmd_gain_ = 1.0;
+double right_odom_gain_ = 1.0;
+double right_front_cmd_gain_ = 1.0;
+double right_rear_cmd_gain_ = 1.0;
 bool right_use_separate_port_ = true;
 std::string right_port_ = "/dev/ttyMotorRight";
 int right_baudrate_ = 57600;
@@ -48,6 +56,10 @@ inline int ClampRpm(int value, int max_abs) {
     if (value > max_abs) return max_abs;
     if (value < -max_abs) return -max_abs;
     return value;
+}
+
+inline int ApplyRpmGain(int rpm, double gain) {
+    return static_cast<int>(std::lround(static_cast<double>(rpm) * gain));
 }
 
 struct SerialPacketParser {
@@ -287,33 +299,45 @@ int SendRightMdData(BYTE byPID, int nArray[]) {
 }
 
 void SendSideDualChannelRpm(int mdt_id, int driver_id, int wheel_rpm, int gear_ratio, int sign) {
-    int scaled_rpm = ClampRpm(wheel_rpm * gear_ratio * sign, max_driver_rpm_);
-    IByte rpm_data = Short2Byte(static_cast<short>(scaled_rpm));
+    const int front_scaled_rpm = ClampRpm(
+        static_cast<int>(std::lround(wheel_rpm * left_front_cmd_gain_)) * gear_ratio * sign,
+        max_driver_rpm_);
+    const int rear_scaled_rpm = ClampRpm(
+        static_cast<int>(std::lround(wheel_rpm * left_rear_cmd_gain_)) * gear_ratio * sign,
+        max_driver_rpm_);
+    IByte front_rpm_data = Short2Byte(static_cast<short>(front_scaled_rpm));
+    IByte rear_rpm_data = Short2Byte(static_cast<short>(rear_scaled_rpm));
     int nArray[20] = {0};
 
-    // One side driver controls two motors (front/rear) with same target RPM.
+    // Left side driver controls two channels(front/rear) independently.
     nArray[0] = 1;
-    nArray[1] = rpm_data.byLow;
-    nArray[2] = rpm_data.byHigh;
+    nArray[1] = front_rpm_data.byLow;
+    nArray[2] = front_rpm_data.byHigh;
     nArray[3] = 1;
-    nArray[4] = rpm_data.byLow;
-    nArray[5] = rpm_data.byHigh;
+    nArray[4] = rear_rpm_data.byLow;
+    nArray[5] = rear_rpm_data.byHigh;
     nArray[6] = 0;
 
     PutMdData(PID_PNT_VEL_CMD, mdt_id, driver_id, nArray);
 }
 
 void SendRightSideDualChannelRpm(int wheel_rpm) {
-    int scaled_rpm = ClampRpm(wheel_rpm * right_gear_ratio_ * right_sign_, max_driver_rpm_);
-    IByte rpm_data = Short2Byte(static_cast<short>(scaled_rpm));
+    const int front_scaled_rpm = ClampRpm(
+        static_cast<int>(std::lround(wheel_rpm * right_front_cmd_gain_)) * right_gear_ratio_ * right_sign_,
+        max_driver_rpm_);
+    const int rear_scaled_rpm = ClampRpm(
+        static_cast<int>(std::lround(wheel_rpm * right_rear_cmd_gain_)) * right_gear_ratio_ * right_sign_,
+        max_driver_rpm_);
+    IByte front_rpm_data = Short2Byte(static_cast<short>(front_scaled_rpm));
+    IByte rear_rpm_data = Short2Byte(static_cast<short>(rear_scaled_rpm));
     int nArray[20] = {0};
 
     nArray[0] = 1;
-    nArray[1] = rpm_data.byLow;
-    nArray[2] = rpm_data.byHigh;
+    nArray[1] = front_rpm_data.byLow;
+    nArray[2] = front_rpm_data.byHigh;
     nArray[3] = 1;
-    nArray[4] = rpm_data.byLow;
-    nArray[5] = rpm_data.byHigh;
+    nArray[4] = rear_rpm_data.byLow;
+    nArray[5] = rear_rpm_data.byHigh;
     nArray[6] = 0;
 
     SendRightMdData(PID_PNT_VEL_CMD, nArray);
@@ -349,11 +373,19 @@ int main(int argc, char *argv[]) {
     node->declare_parameter("GearRatio", 25);
     node->declare_parameter("poles", 8);
     node->declare_parameter("left_sign", 1);
+    node->declare_parameter("left_cmd_gain", 1.0);
+    node->declare_parameter("left_odom_gain", 1.0);
+    node->declare_parameter("left_front_cmd_gain", 1.0);
+    node->declare_parameter("left_rear_cmd_gain", 1.0);
     node->declare_parameter("right_enabled", true);
     node->declare_parameter("RightID", 1);
     node->declare_parameter("RightMDT", 183);
     node->declare_parameter("RightGearRatio", 25);
     node->declare_parameter("right_sign", 1);
+    node->declare_parameter("right_cmd_gain", 1.0);
+    node->declare_parameter("right_odom_gain", 1.0);
+    node->declare_parameter("right_front_cmd_gain", 1.0);
+    node->declare_parameter("right_rear_cmd_gain", 1.0);
     node->declare_parameter("RightUseSeparatePort", true);
     node->declare_parameter("RightPort", "/dev/ttyMotorRight");
     node->declare_parameter("RightBaudrate", 57600);
@@ -373,11 +405,19 @@ int main(int argc, char *argv[]) {
     node->get_parameter("GearRatio", Motor.GearRatio);
     node->get_parameter("poles", Motor.poles);
     node->get_parameter("left_sign", left_sign_);
+    node->get_parameter("left_cmd_gain", left_cmd_gain_);
+    node->get_parameter("left_odom_gain", left_odom_gain_);
+    node->get_parameter("left_front_cmd_gain", left_front_cmd_gain_);
+    node->get_parameter("left_rear_cmd_gain", left_rear_cmd_gain_);
     node->get_parameter("right_enabled", right_enabled_);
     node->get_parameter("RightID", right_driver_id_);
     node->get_parameter("RightMDT", right_driver_mdt_);
     node->get_parameter("RightGearRatio", right_gear_ratio_);
     node->get_parameter("right_sign", right_sign_);
+    node->get_parameter("right_cmd_gain", right_cmd_gain_);
+    node->get_parameter("right_odom_gain", right_odom_gain_);
+    node->get_parameter("right_front_cmd_gain", right_front_cmd_gain_);
+    node->get_parameter("right_rear_cmd_gain", right_rear_cmd_gain_);
     node->get_parameter("RightUseSeparatePort", right_use_separate_port_);
     node->get_parameter("RightPort", right_port_);
     node->get_parameter("RightBaudrate", right_baudrate_);
@@ -472,8 +512,10 @@ int main(int argc, char *argv[]) {
                             break;
                         }
 
-                        const double left_distance = static_cast<double>(delta_left_ticks) * left_tick_to_rad_ * wheel_radius;
-                        const double right_distance = static_cast<double>(delta_right_ticks) * right_tick_to_rad_ * wheel_radius;
+                        const double left_distance =
+                            static_cast<double>(delta_left_ticks) * left_tick_to_rad_ * wheel_radius * left_odom_gain_;
+                        const double right_distance =
+                            static_cast<double>(delta_right_ticks) * right_tick_to_rad_ * wheel_radius * right_odom_gain_;
 
                         const double delta_s = 0.5 * (left_distance + right_distance);
                         const double delta_yaw = (wheel_base > 1e-6)
@@ -490,10 +532,12 @@ int main(int argc, char *argv[]) {
                         }
                     } else {
                         // Fallback: integrate cmd-based wheel speeds when feedback is not ready.
+                        const int left_cmd_rpm = ApplyRpmGain(left_rpm_, left_cmd_gain_);
+                        const int right_cmd_rpm = ApplyRpmGain(right_rpm_, right_cmd_gain_);
                         const double left_wheel_mps =
-                            (static_cast<double>(left_rpm_) * 2.0 * PI * wheel_radius) / 60.0;
+                            (static_cast<double>(left_cmd_rpm) * 2.0 * PI * wheel_radius) / 60.0;
                         const double right_wheel_mps = right_enabled_
-                            ? (static_cast<double>(right_rpm_) * 2.0 * PI * wheel_radius) / 60.0
+                            ? (static_cast<double>(right_cmd_rpm) * 2.0 * PI * wheel_radius) / 60.0
                             : left_wheel_mps;
 
                         linear_x = 0.5 * (left_wheel_mps + right_wheel_mps);
@@ -558,12 +602,15 @@ int main(int argc, char *argv[]) {
 
                         if(SendCmdRpm)
                         {
+                            const int left_cmd_rpm = ApplyRpmGain(left_rpm_, left_cmd_gain_);
+                            const int right_cmd_rpm = ApplyRpmGain(right_rpm_, right_cmd_gain_);
+
                             // Left side driver (A)
-                            SendSideDualChannelRpm(Com.nIDMDT, Motor.ID, left_rpm_, Motor.GearRatio, left_sign_);
+                            SendSideDualChannelRpm(Com.nIDMDT, Motor.ID, left_cmd_rpm, Motor.GearRatio, left_sign_);
 
                             // Right side driver (B)
                             if (right_enabled_) {
-                                SendRightSideDualChannelRpm(right_rpm_);
+                                SendRightSideDualChannelRpm(right_cmd_rpm);
                             }
 
                             //n대의 모터드라이버에게 동시에 main data를 요청할 경우 data를 받을 때 데이터가 섞임을 방지.

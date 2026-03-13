@@ -42,11 +42,19 @@ def generate_launch_description():
       "GearRatio":25,
       "poles":8,
       "left_sign":1,
+      "left_cmd_gain":1.0,      # Left command gain (speed asymmetry compensation)
+      "left_odom_gain":1.0,     # Left odom gain (distance/yaw calibration)
+      "left_front_cmd_gain":1.0,  # Left front channel gain
+      "left_rear_cmd_gain":1.0,   # Left rear channel gain
       "right_enabled":True,
       "RightID":1,             # Right (B) driver ID (separate port, same ID allowed)
       "RightMDT":183,
       "RightGearRatio":25,
       "right_sign":1,
+      "right_cmd_gain":1.0,     # Right command gain (speed asymmetry compensation)
+      "right_odom_gain":1.0,    # Right odom gain (distance/yaw calibration)
+      "right_front_cmd_gain":1.0, # Right front channel gain
+      "right_rear_cmd_gain":1.0,  # Right rear channel gain
       "RightUseSeparatePort":True,
       "RightPort":"/dev/ttyMotorRight",
       "RightBaudrate":57600,

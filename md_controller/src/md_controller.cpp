@@ -477,7 +477,17 @@ int main(int argc, char *argv[]) {
     imu_lowpass_alpha_ = std::clamp(imu_lowpass_alpha_, 0.0, 1.0);
     imu_timeout_sec_ = std::max(0.0, imu_timeout_sec_);
 
-    auto imu_sub = node->create_subscription<sensor_msgs::msg::Imu>(imu_topic_, 50, ImuCallback);
+    RCLCPP_INFO(
+        rclcpp::get_logger("rclcpp"),
+        "IMU yaw correction: %s, topic: %s, weight: %.2f",
+        use_imu_yaw_correction_ ? "ON" : "OFF",
+        imu_topic_.c_str(),
+        imu_yaw_weight_);
+
+    auto imu_sub = node->create_subscription<sensor_msgs::msg::Imu>(
+        imu_topic_,
+        rclcpp::SensorDataQoS(),
+        ImuCallback);
     (void)imu_sub;
 
     //Robot Param load for kinematics.cpp

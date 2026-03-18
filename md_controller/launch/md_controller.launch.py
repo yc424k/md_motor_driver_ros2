@@ -18,6 +18,15 @@ def generate_launch_description():
   # Launch configuration variables specific to simulation
   rviz_config_file = LaunchConfiguration('rviz_config_file')
   use_rviz = LaunchConfiguration('use_rviz')
+  publish_camera_static_tf = LaunchConfiguration('publish_camera_static_tf')
+  camera_tf_parent = LaunchConfiguration('camera_tf_parent')
+  camera_tf_child = LaunchConfiguration('camera_tf_child')
+  camera_tf_x = LaunchConfiguration('camera_tf_x')
+  camera_tf_y = LaunchConfiguration('camera_tf_y')
+  camera_tf_z = LaunchConfiguration('camera_tf_z')
+  camera_tf_yaw = LaunchConfiguration('camera_tf_yaw')
+  camera_tf_pitch = LaunchConfiguration('camera_tf_pitch')
+  camera_tf_roll = LaunchConfiguration('camera_tf_roll')
     
   declare_rviz_config_file_cmd = DeclareLaunchArgument(
     name='rviz_config_file',
@@ -28,6 +37,51 @@ def generate_launch_description():
     name='use_rviz',
     default_value='False',
     description='Whether to start RVIZ')
+
+  declare_publish_camera_static_tf_cmd = DeclareLaunchArgument(
+    name='publish_camera_static_tf',
+    default_value='True',
+    description='Whether to publish static TF from base_link to camera_link')
+
+  declare_camera_tf_parent_cmd = DeclareLaunchArgument(
+    name='camera_tf_parent',
+    default_value='base_link',
+    description='Parent frame for camera static TF')
+
+  declare_camera_tf_child_cmd = DeclareLaunchArgument(
+    name='camera_tf_child',
+    default_value='camera_link',
+    description='Child frame for camera static TF')
+
+  declare_camera_tf_x_cmd = DeclareLaunchArgument(
+    name='camera_tf_x',
+    default_value='0.29',
+    description='Static TF X (m): base_link -> camera_link')
+
+  declare_camera_tf_y_cmd = DeclareLaunchArgument(
+    name='camera_tf_y',
+    default_value='0.0',
+    description='Static TF Y (m): base_link -> camera_link')
+
+  declare_camera_tf_z_cmd = DeclareLaunchArgument(
+    name='camera_tf_z',
+    default_value='0.53',
+    description='Static TF Z (m): base_link -> camera_link')
+
+  declare_camera_tf_yaw_cmd = DeclareLaunchArgument(
+    name='camera_tf_yaw',
+    default_value='0.0',
+    description='Static TF yaw (rad): base_link -> camera_link')
+
+  declare_camera_tf_pitch_cmd = DeclareLaunchArgument(
+    name='camera_tf_pitch',
+    default_value='0.0',
+    description='Static TF pitch (rad): base_link -> camera_link')
+
+  declare_camera_tf_roll_cmd = DeclareLaunchArgument(
+    name='camera_tf_roll',
+    default_value='0.0',
+    description='Static TF roll (rad): base_link -> camera_link')
   
   # Launch motor driver controller
   md_controller_cmd = Node(
@@ -83,16 +137,44 @@ def generate_launch_description():
     name='rviz2',
     output='screen',
     arguments=['-d', rviz_config_file])
+
+  # Publish base_link -> camera_link static transform
+  camera_static_tf_cmd = Node(
+    condition=IfCondition(publish_camera_static_tf),
+    package='tf2_ros',
+    executable='static_transform_publisher',
+    name='base_to_camera_static_tf',
+    output='screen',
+    arguments=[
+      camera_tf_x,
+      camera_tf_y,
+      camera_tf_z,
+      camera_tf_yaw,
+      camera_tf_pitch,
+      camera_tf_roll,
+      camera_tf_parent,
+      camera_tf_child
+    ])
   
   # Create the launch description and populate
   ld = LaunchDescription()
 
   # Declare the launch options
   ld.add_action(declare_rviz_config_file_cmd)
-  ld.add_action(declare_use_rviz_cmd) 
+  ld.add_action(declare_use_rviz_cmd)
+  ld.add_action(declare_publish_camera_static_tf_cmd)
+  ld.add_action(declare_camera_tf_parent_cmd)
+  ld.add_action(declare_camera_tf_child_cmd)
+  ld.add_action(declare_camera_tf_x_cmd)
+  ld.add_action(declare_camera_tf_y_cmd)
+  ld.add_action(declare_camera_tf_z_cmd)
+  ld.add_action(declare_camera_tf_yaw_cmd)
+  ld.add_action(declare_camera_tf_pitch_cmd)
+  ld.add_action(declare_camera_tf_roll_cmd)
 
   # Add any actions
   ld.add_action(md_controller_cmd)
+  ld.add_action(camera_static_tf_cmd)
   ld.add_action(start_rviz_cmd)
 
   return ld

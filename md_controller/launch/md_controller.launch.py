@@ -93,8 +93,8 @@ def generate_launch_description():
       "Port":"/dev/ttyMotorLeft",
       "Baudrate":57600,
       "ID":1,                  # Left (A) driver ID
-      "GearRatio":25,
-      "poles":8,
+      "GearRatio":4.33,
+      "poles":20,
       "left_sign":1,
       "left_cmd_gain":1.0,      # Left command gain (speed asymmetry compensation)
       "left_odom_gain":1.0,     # Left odom gain (distance/yaw calibration)
@@ -103,7 +103,7 @@ def generate_launch_description():
       "right_enabled":True,
       "RightID":1,             # Right (B) driver ID (separate port, same ID allowed)
       "RightMDT":183,
-      "RightGearRatio":25,
+      "RightGearRatio":4.33,
       "right_sign":1,
       "right_cmd_gain":1.0,     # Right command gain (speed asymmetry compensation)
       "right_odom_gain":1.0,    # Right odom gain (distance/yaw calibration)
@@ -113,9 +113,9 @@ def generate_launch_description():
       "RightPort":"/dev/ttyMotorRight",
       "RightBaudrate":57600,
       "cmd_timeout_ms":300,
-      "max_driver_rpm":3000,
-      "wheel_radius": 0.103,
-      "wheel_base": 0.160,
+      "max_driver_rpm":700,
+      "wheel_radius": 0.100,
+      "wheel_base": 0.440,
       "use_imu_yaw_correction": True,
       "imu_topic": "/camera/camera/imu",
       "imu_yaw_weight": 0.7,

@@ -29,7 +29,7 @@ double left_rear_cmd_gain_ = 1.0;
 bool right_enabled_ = true;
 int right_driver_id_ = 1;
 int right_driver_mdt_ = 183;
-int right_gear_ratio_ = 25;
+double right_gear_ratio_ = 25.0;
 int right_sign_ = 1;
 double right_cmd_gain_ = 1.0;
 double right_odom_gain_ = 1.0;
@@ -317,12 +317,14 @@ int SendRightMdData(BYTE byPID, int nArray[]) {
     return PutMdData(byPID, right_driver_mdt_, right_driver_id_, nArray);
 }
 
-void SendSideDualChannelRpm(int mdt_id, int driver_id, int wheel_rpm, int gear_ratio, int sign) {
+void SendSideDualChannelRpm(int mdt_id, int driver_id, int wheel_rpm, double gear_ratio, int sign) {
     const int front_scaled_rpm = ClampRpm(
-        static_cast<int>(std::lround(wheel_rpm * left_front_cmd_gain_)) * gear_ratio * sign,
+        static_cast<int>(std::lround(
+            static_cast<double>(wheel_rpm) * left_front_cmd_gain_ * gear_ratio * static_cast<double>(sign))),
         max_driver_rpm_);
     const int rear_scaled_rpm = ClampRpm(
-        static_cast<int>(std::lround(wheel_rpm * left_rear_cmd_gain_)) * gear_ratio * sign,
+        static_cast<int>(std::lround(
+            static_cast<double>(wheel_rpm) * left_rear_cmd_gain_ * gear_ratio * static_cast<double>(sign))),
         max_driver_rpm_);
     IByte front_rpm_data = Short2Byte(static_cast<short>(front_scaled_rpm));
     IByte rear_rpm_data = Short2Byte(static_cast<short>(rear_scaled_rpm));
@@ -342,10 +344,12 @@ void SendSideDualChannelRpm(int mdt_id, int driver_id, int wheel_rpm, int gear_r
 
 void SendRightSideDualChannelRpm(int wheel_rpm) {
     const int front_scaled_rpm = ClampRpm(
-        static_cast<int>(std::lround(wheel_rpm * right_front_cmd_gain_)) * right_gear_ratio_ * right_sign_,
+        static_cast<int>(std::lround(
+            static_cast<double>(wheel_rpm) * right_front_cmd_gain_ * right_gear_ratio_ * static_cast<double>(right_sign_))),
         max_driver_rpm_);
     const int rear_scaled_rpm = ClampRpm(
-        static_cast<int>(std::lround(wheel_rpm * right_rear_cmd_gain_)) * right_gear_ratio_ * right_sign_,
+        static_cast<int>(std::lround(
+            static_cast<double>(wheel_rpm) * right_rear_cmd_gain_ * right_gear_ratio_ * static_cast<double>(right_sign_))),
         max_driver_rpm_);
     IByte front_rpm_data = Short2Byte(static_cast<short>(front_scaled_rpm));
     IByte rear_rpm_data = Short2Byte(static_cast<short>(rear_scaled_rpm));
@@ -404,8 +408,8 @@ int main(int argc, char *argv[]) {
     node->declare_parameter("Port", "/dev/ttyMotorLeft");
     node->declare_parameter("Baudrate", 57600);
     node->declare_parameter("ID", 1); //fix
-    node->declare_parameter("GearRatio", 25);
-    node->declare_parameter("poles", 8);
+    node->declare_parameter("GearRatio", 4.33);
+    node->declare_parameter("poles", 20);
     node->declare_parameter("left_sign", 1);
     node->declare_parameter("left_cmd_gain", 1.0);
     node->declare_parameter("left_odom_gain", 1.0);
@@ -414,7 +418,7 @@ int main(int argc, char *argv[]) {
     node->declare_parameter("right_enabled", true);
     node->declare_parameter("RightID", 1);
     node->declare_parameter("RightMDT", 183);
-    node->declare_parameter("RightGearRatio", 25);
+    node->declare_parameter("RightGearRatio", 4.33);
     node->declare_parameter("right_sign", 1);
     node->declare_parameter("right_cmd_gain", 1.0);
     node->declare_parameter("right_odom_gain", 1.0);
@@ -424,9 +428,9 @@ int main(int argc, char *argv[]) {
     node->declare_parameter("RightPort", "/dev/ttyMotorRight");
     node->declare_parameter("RightBaudrate", 57600);
     node->declare_parameter("cmd_timeout_ms", 300);
-    node->declare_parameter("max_driver_rpm", 3000);
-    node->declare_parameter("wheel_radius", 0.103);
-    node->declare_parameter("wheel_base", 0.160);
+    node->declare_parameter("max_driver_rpm", 700);
+    node->declare_parameter("wheel_radius", 0.100);
+    node->declare_parameter("wheel_base", 0.440);
     node->declare_parameter("use_imu_yaw_correction", false);
     node->declare_parameter("imu_topic", "/camera/camera/imu");
     node->declare_parameter("imu_yaw_weight", 0.7);
@@ -496,10 +500,10 @@ int main(int argc, char *argv[]) {
     node->get_parameter("wheel_base", wheel_base_param);
     setRobotParams(wheel_radius_param, wheel_base_param);
 
-    Motor.PPR       = Motor.poles*3*Motor.GearRatio;           //poles * 3(HALL U,V,W) * gear ratio
-    Motor.Tick2RAD  = (360.0/Motor.PPR)*PI / 180;
+    Motor.PPR       = std::max(1.0f, static_cast<float>(Motor.poles * 3.0 * Motor.GearRatio));  // poles * 3(HALL U,V,W) * gear ratio
+    Motor.Tick2RAD  = (360.0 / Motor.PPR) * PI / 180.0;
     left_tick_to_rad_ = Motor.Tick2RAD;
-    const double right_ppr = std::max(1, Motor.poles * 3 * right_gear_ratio_);
+    const double right_ppr = std::max(1.0, Motor.poles * 3.0 * right_gear_ratio_);
     right_tick_to_rad_ = (360.0 / right_ppr) * PI / 180.0;
 
     int nArray[20];

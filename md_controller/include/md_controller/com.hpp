@@ -87,7 +87,8 @@ typedef struct {
 extern Communication Com;
 
 typedef struct{
-    int ID, GearRatio, InitError, poles;
+    int ID, InitError, poles;
+    double GearRatio;
     BYTE InitMotor;
     short rpm;
     long position;
